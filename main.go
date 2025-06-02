@@ -1,16 +1,11 @@
 package main
 
-//import "oxypubsub/src/broker"
-
-import (
-	"fmt"
-	broker "oxypubsub/src"
-)
+import broker "oxypubsub/src"
 
 func main() {
 	broker := broker.CreateBroker()
 
-	broker.Start("10868")
+	broker.Subscribe("test-topic")
 
-	fmt.Println("Server started at 10868")
+	broker.Publish("test-topic", "first message published")
 }
