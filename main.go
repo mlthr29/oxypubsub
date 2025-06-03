@@ -1,11 +1,22 @@
 package main
 
-import broker "oxypubsub/src"
+import (
+	"os"
+	"os/signal"
+	broker "oxypubsub/src"
+	"syscall"
+)
 
 func main() {
-	broker := broker.CreateBroker()
+	b := broker.CreateBroker()
 
-	broker.Subscribe("test-topic")
+	server := broker.CreateTCPServer(":8080", b)
 
-	broker.Publish("test-topic", "first message published")
+	go server.Start()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	server.Stop()
 }
