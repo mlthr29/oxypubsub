@@ -10,7 +10,7 @@ import (
 func main() {
 	b := broker.CreateBroker()
 
-	server := broker.CreateTCPServer(":8080", b)
+	server := broker.CreateTCPServer(":8080", ":8081", b)
 
 	go server.Start()
 

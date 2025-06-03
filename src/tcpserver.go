@@ -10,12 +10,14 @@ import (
 )
 
 type TCPServer struct {
-	address  string
-	broker   *Broker
-	listener net.Listener
-	clients  map[string]*TCPClient
-	mutex    sync.RWMutex
-	quit     chan struct{}
+	subAddress  string
+	pubAddress  string
+	broker      *Broker
+	subListener net.Listener
+	pubListener net.Listener
+	clients     map[string]*TCPClient
+	mutex       sync.RWMutex
+	quit        chan struct{}
 }
 
 type TCPClient struct {
@@ -27,47 +29,45 @@ type TCPClient struct {
 	mutex         sync.RWMutex
 }
 
-func CreateTCPServer(address string, broker *Broker) *TCPServer {
+func CreateTCPServer(subAddress, pubAddress string, broker *Broker) *TCPServer {
 	return &TCPServer{
-		address: address,
-		broker:  broker,
-		clients: make(map[string]*TCPClient),
-		quit:    make(chan struct{}),
+		subAddress: subAddress,
+		pubAddress: pubAddress,
+		broker:     broker,
+		clients:    make(map[string]*TCPClient),
+		quit:       make(chan struct{}),
 	}
 }
 
 func (s *TCPServer) Start() error {
-	listener, err := net.Listen("tcp", s.address)
+	subListener, err := net.Listen("tcp", s.subAddress)
 	if err != nil {
-		return fmt.Errorf("Failed to start the TCP server: %v", err)
+		return fmt.Errorf("Failed to start the Sub listener: %v", err)
 	}
 
-	s.listener = listener
+	s.subListener = subListener
 
-	for {
-		select {
-		case <-s.quit:
-			return nil
-		default:
-			conn, err := listener.Accept()
-			if err != nil {
-				select {
-				case <-s.quit:
-					return nil
-				default:
-					continue
-				}
-			}
-
-			go s.handleConnection(conn)
-		}
+	pubListener, err := net.Listen("tcp", s.pubAddress)
+	if err != nil {
+		return fmt.Errorf("Failed to start the Pub listener: %v", err)
 	}
+	s.pubListener = pubListener
+
+	go s.acceptSubscribers()
+
+	go s.acceptPublishers()
+
+	return nil
 }
 
 func (s *TCPServer) Stop() {
 	close(s.quit)
-	if s.listener != nil {
-		s.listener.Close()
+	if s.subListener != nil {
+		s.subListener.Close()
+	}
+
+	if s.pubListener != nil {
+		s.pubListener.Close()
 	}
 
 	s.mutex.Lock()
@@ -77,8 +77,50 @@ func (s *TCPServer) Stop() {
 	s.mutex.Unlock()
 }
 
-func (s *TCPServer) handleConnection(conn net.Conn) {
-	clientID := fmt.Sprintf("tcp-%s-%d", conn.RemoteAddr().String(), time.Now().UnixNano())
+func (s *TCPServer) acceptSubscribers() {
+	for {
+		select {
+		case <-s.quit:
+			return
+		default:
+			conn, err := s.subListener.Accept()
+			if err != nil {
+				select {
+				case <-s.quit:
+					return
+				default:
+					continue
+				}
+			}
+
+			go s.handleSubscriberConnection(conn)
+		}
+	}
+}
+
+func (s *TCPServer) acceptPublishers() {
+	for {
+		select {
+		case <-s.quit:
+			return
+		default:
+			conn, err := s.pubListener.Accept()
+			if err != nil {
+				select {
+				case <-s.quit:
+					return
+				default:
+					continue
+				}
+			}
+
+			go s.handlePublisherConnection(conn)
+		}
+	}
+}
+
+func (s *TCPServer) handleSubscriberConnection(conn net.Conn) {
+	clientID := fmt.Sprintf("sub-%s-%d", conn.RemoteAddr().String(), time.Now().UnixNano())
 
 	client := &TCPClient{
 		id:            clientID,
@@ -92,15 +134,15 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 	s.clients[clientID] = client
 	s.mutex.Unlock()
 
-	fmt.Fprintf(conn, "WELCOME: Connected to Oxy Pub/Sub broker server\n")
-	fmt.Fprintf(conn, "Commands: SUB <topic>, PUB <topic> <message>, LIST, QUIT\n")
+	fmt.Fprintf(conn, "WELCOME: Connected to Oxy Pub/Sub Subscriber Server\n")
+	fmt.Fprintf(conn, "Commands: SUB <topic>, LIST, QUIT\n")
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		client.handleCommands()
+		client.handleSubscriberCommands()
 	}()
 
 	go func() {
@@ -117,7 +159,32 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 	conn.Close()
 }
 
-func (c *TCPClient) handleCommands() {
+func (s *TCPServer) handlePublisherConnection(conn net.Conn) {
+	clientID := fmt.Sprintf("pub-%s-%d", conn.RemoteAddr().String(), time.Now().UnixNano())
+
+	client := &TCPClient{
+		id:     clientID,
+		conn:   conn,
+		broker: s.broker,
+		quit:   make(chan struct{}),
+	}
+
+	s.mutex.Lock()
+	s.clients[clientID] = client
+	s.mutex.Unlock()
+
+	fmt.Fprintf(conn, "WELCOME: Connected to Oxy Pub/Sub Publisher Server\n")
+	fmt.Fprintf(conn, "Commands: PUB <topic> <message>, LIST, QUIT\n")
+
+	client.handlePublisherCommands()
+
+	s.mutex.Lock()
+	delete(s.clients, clientID)
+	s.mutex.Unlock()
+
+	conn.Close()
+}
+func (c *TCPClient) handleSubscriberCommands() {
 	defer c.close()
 
 	scanner := bufio.NewScanner(c.conn)
@@ -143,6 +210,37 @@ func (c *TCPClient) handleCommands() {
 			topic := parts[1]
 			c.subscribe(topic)
 
+		case "LIST":
+			c.listTopics()
+
+		case "QUIT":
+			fmt.Fprintf(c.conn, "BYE: Disconnecting\n")
+			return
+
+		default:
+			fmt.Fprintf(c.conn, "ERROR: Subscribers can only use SUB, LIST, or QUIT\n")
+		}
+	}
+}
+
+func (c *TCPClient) handlePublisherCommands() {
+	defer c.close()
+
+	scanner := bufio.NewScanner(c.conn)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) == 0 {
+			continue
+		}
+
+		command := strings.ToUpper(parts[0])
+
+		switch command {
 		case "PUB":
 			if len(parts) < 3 {
 				fmt.Fprintf(c.conn, "ERROR: PUB requires topic and message\n")
@@ -163,7 +261,7 @@ func (c *TCPClient) handleCommands() {
 			return
 
 		default:
-			fmt.Fprintf(c.conn, "ERROR: Unknown command: %s\n", command)
+			fmt.Fprintf(c.conn, "ERROR: Publishers can only use PUB, LIST, or QUIT\n")
 		}
 	}
 }
