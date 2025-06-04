@@ -1,63 +1,85 @@
 package broker
 
 import (
-	"log"
 	"sync"
 )
 
 type Broker struct {
-	subscribers map[string][]chan string
+	subscribers map[chan string]struct{}
+	publishers  map[chan string]struct{}
 	mutex       sync.RWMutex
 }
 
 func CreateBroker() *Broker {
 	return &Broker{
-		subscribers: make(map[string][]chan string, 0),
+		subscribers: make(map[chan string]struct{}),
+		publishers:  make(map[chan string]struct{}),
 	}
 }
 
-func (broker *Broker) Subscribe(topic string) <-chan string {
+func (broker *Broker) Subscribe() chan string {
 	broker.mutex.Lock()
 	defer broker.mutex.Unlock()
 
 	ch := make(chan string, 10)
-	broker.subscribers[topic] = append(broker.subscribers[topic], ch)
+	broker.subscribers[ch] = struct{}{}
 
-	log.Printf("Topic '%s' has a new subsciber!", topic)
+	broker.notifyPublishers("A NEW SUBSCRIBER JOINED!")
 
 	return ch
 }
 
-func (broker *Broker) Publish(topic, message string) {
-	broker.mutex.RLock()
-	defer broker.mutex.RUnlock()
+func (broker *Broker) Unsubscribe(ch chan string) {
+	broker.mutex.Lock()
+	defer broker.mutex.Unlock()
 
-	channels, exists := broker.subscribers[topic]
-	if !exists {
-		log.Printf("No subscribers for topic: '%s'", topic)
-		return
+	if _, ok := broker.subscribers[ch]; ok {
+		delete(broker.subscribers, ch)
+		close(ch)
+
+		if len(broker.subscribers) == 0 {
+			broker.notifyPublishers("NO SUBSCRIBERS AVAILABLE!")
+		}
 	}
-
-	for _, ch := range channels {
-		go func(channel chan string) {
-			select {
-			case channel <- message:
-			default:
-				log.Println("Message was dropped because channel is full")
-			}
-		}(ch)
-	}
-
-	log.Println("Message successfully published to subscribers")
 }
 
-func (broker *Broker) GetTopics() []string {
+func (broker *Broker) RegisterPublisher() chan string {
+	broker.mutex.Lock()
+	defer broker.mutex.Unlock()
+
+	ch := make(chan string, 10)
+	broker.publishers[ch] = struct{}{}
+
+	return ch
+}
+
+func (broker *Broker) DeregisterPublisher(ch chan string) {
+	broker.mutex.Lock()
+	defer broker.mutex.Unlock()
+
+	if _, ok := broker.publishers[ch]; ok {
+		delete(broker.publishers, ch)
+		close(ch)
+	}
+}
+
+func (broker *Broker) Publish(message string) {
 	broker.mutex.RLock()
 	defer broker.mutex.RUnlock()
 
-	topics := make([]string, 0, len(broker.subscribers))
-	for topic := range broker.subscribers {
-		topics = append(topics, topic)
+	for ch := range broker.subscribers {
+		select {
+		case ch <- message:
+		default:
+		}
 	}
-	return topics
+}
+
+func (broker *Broker) notifyPublishers(message string) {
+	for ch := range broker.publishers {
+		select {
+		case ch <- message:
+		default:
+		}
+	}
 }
