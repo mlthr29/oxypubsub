@@ -94,6 +94,19 @@ func (s *TCPServer) handleSubscribers(conn net.Conn) {
 
 	fmt.Fprintf(conn, "WELCOME: Connected to Oxy Pub/Sub Subscriber Server\n")
 
+	disconnected := make(chan struct{})
+
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			_, err := conn.Read(buf)
+			if err != nil {
+				close(disconnected)
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
 		case msg, ok := <-msgCh:
@@ -103,6 +116,9 @@ func (s *TCPServer) handleSubscribers(conn net.Conn) {
 			if _, err := fmt.Fprintf(conn, "MESSAGE: %s\n", msg); err != nil {
 				return
 			}
+
+		case <-disconnected:
+			return
 		case <-s.quit:
 			return
 		}
