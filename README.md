@@ -1,6 +1,5 @@
 # Oxy PubSub Broker
 
-
 ## Description
 A proof of concept broker for messaging over TCP implemented in Go.
 
@@ -25,7 +24,7 @@ A proof of concept broker for messaging over TCP implemented in Go.
 2. Run the following `compose` command to build image and deploy the server:
 
 ```sh
-docker compose up \[-d\]
+docker compose up [-d]
 ```
 
 `docker-compose.yml` file can be modified to designate which ports should be mapped for subscriber and publishers.
