@@ -3,6 +3,7 @@ package broker
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -72,7 +73,7 @@ func (s *TCPServer) accept(listener net.Listener, handler func(net.Conn)) {
 			case <-s.quit:
 				return
 			default:
-				fmt.Errorf("Error accepting connection: %w", err)
+				log.Printf("Error accepting connection: %v", err)
 				continue
 			}
 		}
