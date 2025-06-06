@@ -1,0 +1,10 @@
+services:
+  oxypubsub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: oxypubsub-server
+    ports:
+      - "8080:8080"  # Subscriber port
+      - "8081:8081"  # Publisher port
+    restart: unless-stopped
